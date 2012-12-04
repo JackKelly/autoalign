@@ -1,14 +1,18 @@
+#! /usr/bin/python
 from __future__ import print_function, division
 import datetime
 import matplotlib.pyplot as plt
 import numpy as np
-
+import sys
 
 class MeterSignal(object):
     def __init__(self, filename):
         """Loads REDD-formatted data. Returns pandas Timeseries."""
-        print("Loading", filename)
+        print("Loading", filename, "...", end="")
         self.data = np.loadtxt(open(filename, 'rU'), dtype=[('timestamp', np.uint32), ('watts', float)])
+        self.f_diff = self.data['watts'][1:] - self.data['watts'][:-1]
+        self.delta_t = self.data['timestamp'][1:] - self.data['timestamp'][:-1]
+        print("done.")
 
     def plot(self, axes):
         x = [datetime.datetime.fromtimestamp(t) for t in self.data['timestamp']]
@@ -29,8 +33,8 @@ class MeterSignal(object):
             end_time = self.data['timestamp'][start_i] + watts_up.duration
             se_acc = 0 # squared error accumulator
             while self.data['timestamp'][i+1] < end_time:
-                haystack_f_diff  = self.data['watts'][i+1] - self.data['watts'][i]
-                haystack_delta_t = self.data['timestamp'][i+1] - self.data['timestamp'][i]
+                haystack_f_diff  = self.f_diff[i]
+                haystack_delta_t = self.delta_t[i]
                 
                 target_start_i = self.data['timestamp'][i] - self.data['timestamp'][start_i]
                 target_end_i = target_start_i + haystack_delta_t
@@ -49,6 +53,9 @@ class MeterSignal(object):
                 best['mse'] = mse
                 best['start_index'] = start_i
                 print(best)
+                
+            print("{:.2%}".format(start_i / self.data.size), end="\r")
+            sys.stdout.flush()
         
         return best
     
