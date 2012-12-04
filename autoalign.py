@@ -6,6 +6,29 @@ import matplotlib
 import numpy as np
 import sys
 
+
+def calc_steady_states(data):
+    """Return a list of 3-element tuples: (start index, end index, value)"""       
+    TOL = 10 # tolerance in watts
+    MIN_LEN = 12 # min length of a steady state
+    av = data[0] # average (mean)
+    acc = data[0] # accumulator (for average)
+    start_i = 0
+    states = []
+    for i in range(1, data.size):
+        if av-TOL < data[i] < av+TOL:
+            acc += data[i]
+            av = acc / (1 + i - start_i)
+        else:
+            if (i-start_i) > MIN_LEN:
+                states.append((start_i, i, av))
+            acc = data[i]
+            av = data[i]
+            start_i = i
+
+    return states
+
+
 class MeterSignal(object):
     def __init__(self, filename):
         """Loads REDD-formatted data. Returns pandas Timeseries."""
@@ -13,6 +36,7 @@ class MeterSignal(object):
         self.data = np.loadtxt(open(filename, 'rU'), dtype=[('timestamp', np.uint32), ('watts', float)])
         self.f_diff = self.data['watts'][1:] - self.data['watts'][:-1]
         self.delta_t = self.data['timestamp'][1:] - self.data['timestamp'][:-1]
+        self.steady_states = calc_steady_states(self.data['watts'])
         print("done.")
 
     def plot(self, axes):
@@ -33,24 +57,20 @@ class MeterSignal(object):
             i = start_i
             end_time = self.data['timestamp'][start_i] + watts_up.duration
             end_i = self.index_from_timestamp(end_time)
-            
-            # get the indices of the 10 largest forward diffs in this window 
-            top_f_diffs = np.argsort(self.f_diff[start_i:end_i])[-10:]
-            
+                       
             se_acc = 0 # squared error accumulator
-            while self.data['timestamp'][i+1] < end_time:
-                haystack_f_diff  = self.f_diff[i]
-                haystack_delta_t = self.delta_t[i]
+            for t_start, t_length, t_value, t_score in watts_up.steady_state_transitions:
+                start_timestamp = self.data['timestamp'][start_i]+t_start
+                end_timestamp = start_timestamp + t_length
                 
-                target_start_i = self.data['timestamp'][i] - self.data['timestamp'][start_i]
-                target_end_i = target_start_i + haystack_delta_t
+                haystack_start_i = self.index_from_timestamp(start_timestamp)
+                haystack_end_i = self.index_from_timestamp(end_timestamp)
                 
-                target_f_diff = watts_up.data[target_end_i] - watts_up.data[target_start_i]
-                 
-                se_acc += (target_f_diff - haystack_f_diff)**2
-                i += 1
+                haystack_fdiff = self.data['watts'][haystack_end_i] - self.data['watts'][haystack_start_i]
                 
-            mse = se_acc / (i - start_i) # mean squared error
+                se_acc += (haystack_fdiff - t_value)**2
+                
+            mse = se_acc / len(watts_up.steady_state_transitions) # mean squared error
             if mse < best['mse']:
                 best['mse'] = mse
                 best['start_index'] = start_i
@@ -99,7 +119,7 @@ class WattsUp(object):
         self.period = period # seconds
         self.data = np.loadtxt(open(filename, 'rU'), delimiter="\t", dtype=float, skiprows=3, usecols=[1])
         self._trim()
-        self.steady_states = self._calc_steady_states()
+        self.steady_states = calc_steady_states(self.data)
         self.steady_state_transitions = self._calc_good_steady_state_transitions()
 
     def plot(self, axes, start_timestamp=0):
@@ -134,7 +154,7 @@ class WattsUp(object):
         """Return a list of 3-element tuples: (start index, end index, value)"""       
         TOL = 10 # tollerance in Watts
         MIN_LEN = 12 # min length of a steady state
-        av = self.data[0]
+        av = self.data[0] # average (mean)
         acc = self.data[0] # accumulator (for average)
         start_i = 0
         states = []
@@ -154,42 +174,43 @@ class WattsUp(object):
     def _calc_good_steady_state_transitions(self):
         """Good state transitions are those which are large in magnitude
         and where the two states are very close"""
+        MIN_SCORE = 10
+        
         ss_transitions = [] # list of tuples for transition: start, length, value, score
         last_ss_end = 0
         last_ss_value = 0
         for ss_start, ss_end, ss_value in self.steady_states:
-            t_start = last_ss_end
-            t_length = ss_start - last_ss_end
+            t_length = (ss_start - last_ss_end) * self.period
             if t_length == 0:
                 t_length = 1
             t_value = ss_value - last_ss_value
             t_score = abs(t_value) if t_length < 18 else abs(t_value)/t_length
-            
-            ss_transitions.append((t_start, t_length, t_value, t_score))
-            last_ss_end = ss_end
+            last_ss_end = ss_end * self.period
             last_ss_value = ss_value
             
+            if t_score > MIN_SCORE:
+                ss_transitions.append((last_ss_end, t_length, t_value, t_score))
+                            
         return sorted(ss_transitions, key=lambda score: score[3], reverse=True)
 
 
 if __name__ == "__main__":
-    haystack = MeterSignal("/home/jack/Dropbox/Data/data0/channel_01.dat")
+    haystack = MeterSignal("/home/jack/Dropbox/Data/data2/channel_5.dat")
     target = WattsUp("/home/jack/Dropbox/Data/BellendenWMNov2012.TXT")
     
     print(target.steady_states)
     print(target.steady_state_transitions)
     
-    
-    #best = haystack.locate_signal(target)
-    #print(best)
+    best = haystack.locate_signal(target)
+    print(best)
     
     fig = plt.figure()
     ax = fig.add_subplot(1,1,1)
     
-    ax.plot(target.data)
-    target.plot_steady_states(ax)
+    #ax.plot(target.data)
+    #target.plot_steady_states(ax)
     
-    #haystack.plot(ax)
-    #target.plot(ax, haystack.data['timestamp'][25387])
+    haystack.plot(ax)
+    target.plot(ax, haystack.data['timestamp'][best['start_index']])
     plt.show()
     
