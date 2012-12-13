@@ -2,5 +2,6 @@
 .pydevproject
 *.pyc
 *.*~
-
+profile.txt
+*.png
 
